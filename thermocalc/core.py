@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+from collections import OrderedDict
 
 class rows_list(list):
     """
@@ -88,7 +89,6 @@ class Context(object):
             os.makedirs(temp_dir)
         self.temp_dir = temp_dir
 
-
     def reload(self):
         """
         Reloads data from working directory.
@@ -98,7 +98,6 @@ class Context(object):
         if not os.path.isfile(tc_prefs):
             raise RuntimeError("Unable to find 'tc-prefs.txt' in '{}'".format(work_dir))
         # read tc-prefs
-        from collections import OrderedDict
         self.prefs = OrderedDict()
         with open(tc_prefs,'r') as fp:
             line = fp.readline()
@@ -157,16 +156,22 @@ class Context(object):
                     else:                                  # otherwise, leave as a list
                         pass
                     # now need to decide how to enter into dictionary.
-                    # first check the number of times this key has been encountered
-                    keycount[key]+=1                       # increment key count
-                    if   keycount[key] == 1:               # if only encountered once, simply create direct pair
-                        self.script[key] = value
-                    if keycount[key] == 2:                 # this is the second time we've encountered this key,
-                        rows = rows_list()                 # so create a list store the rows,
-                        rows.append(self.script[key])      # and append previously encountered value as first item in row list.
-                        self.script[key] = rows            # now replace that previous value with the rows list (which contains it). 
-                    if keycount[key] > 1:
-                        self.script[key].append(value)     # append value to rows list of values 
+                    # treat "xyzguess" as dictionary
+                    if key=="xyzguess":
+                        if "xyzguess" not in self.script.keys():
+                            self.script["xyzguess"] = OrderedDict()
+                        self.script["xyzguess"][value[0]] = value[1:]
+                    else:
+                        # first check the number of times this key has been encountered
+                        keycount[key]+=1                       # increment key count
+                        if   keycount[key] == 1:               # if only encountered once, simply create direct pair
+                            self.script[key] = value
+                        if keycount[key] == 2:                 # this is the second time we've encountered this key,
+                            rows = rows_list()                 # so create a list store the rows,
+                            rows.append(self.script[key])      # and append previously encountered value as first item in row list.
+                            self.script[key] = rows            # now replace that previous value with the rows list (which contains it). 
+                        if keycount[key] > 1:
+                            self.script[key].append(value)     # append value to rows list of values 
                 line = fp.readline()
 
     def _longest_key(self, dictguy):
@@ -183,7 +188,7 @@ class Context(object):
         """
         Prints item or list of items
         """
-        if isinstance(item,list):
+        if   isinstance(item,list):
             return " ".join(str(p).ljust(just) for p in item)
         return item
 
@@ -193,10 +198,15 @@ class Context(object):
         """
         longest = self._longest_key(self.script)
         for key, value in self.script.items():
-            if isinstance(value, rows_list):
+            if   isinstance(value, rows_list):
                 print("{} :".format(key))
                 for item in value:
                     print("    {}".format(self._get_string(item,10)))
+            elif isinstance(value, dict):
+                print("{} :".format(key))
+                longest_inner = self._longest_key(value)
+                for valkey,item in value.items():
+                    print("    {} : {}".format(valkey.ljust(longest_inner), self._get_string(item,10)))
             else:
                 print("{}: {}".format(key.ljust(longest+1),self._get_string(value)))
 
@@ -215,6 +225,10 @@ class Context(object):
                 if isinstance(value, rows_list):
                     for item in value:
                         fp.write("{} {}\n".format(key,self._get_string(item)))
+                elif isinstance(value, dict):
+                    longest_inner = self._longest_key(value)
+                    for valkey,item in value.items():
+                        fp.write("{} {} {}\n".format(key,valkey, self._get_string(item,10)))
                 else:
                     fp.write("{} {}\n".format(key.ljust(longest+1),self._get_string(value)))
 
@@ -253,6 +267,17 @@ class Context(object):
             Files which are generated resultant of the `thermocalc` execution are by 
             default not copied back to the context location. Enable this flag to have
             generated files copied. 
+
+        Returns
+        -------
+        Named tuple including:
+            stdout: The full standard output from the `thermocalc` simulation.
+            stderr: The full standard error from the `thermocalc` simulation.
+            phases: List of phases.
+            P     : Pressure (kbar).
+            T     : Temperature (íC).
+            xyz   : Mineral compositions (as a dictionary).
+            modes : Mineral modes (as a dictionary).
         """
 
         if copy_new_files:
@@ -273,4 +298,47 @@ class Context(object):
         # now copy axfile
         axfile = "tc-{}.txt".format(self.script['axfile'])
         copyfile(os.path.join(self.work_dir,axfile), os.path.join(self.temp_dir,axfile))
+
+        from subprocess import Popen, PIPE, STDOUT
+        p = Popen(self.exec,cwd=self.temp_dir, stdout=PIPE, stdin=PIPE, stderr=PIPE)
+        std_data = p.communicate(input=b'n\n')
+
+        from collections import namedtuple
+        Result = namedtuple("Results", ["stdout","stderr", "phases", "P", "T", "xyz", "modes"])
+        stdout = std_data[0].decode("cp437") # record standard output
+        stderr = std_data[1].decode("cp437") # record standard error
+
+        phases = None
+        P = None
+        T = None
+        xyz = None
+        modes = None
+
+        # now let's try and parse output.  
+        # put in a 'try' block so that we can fail usefully.
+        try:
+            splt1 = "##########################################################"
+            splt2 = "more phase diagram calculations"
+            strguy = stdout.split(splt1)[1].split(splt2)[0].split('\n')          # split on above blocks, then on new line
+            phases = strguy[1].split('phases: ')[1]                              # grab phases
+
+            list1 = strguy[3].split()                                            # process P, T, xyz
+            list2 = strguy[4].split()
+            P = float(list2[0])
+            T = float(list2[1])
+            xyz = OrderedDict()
+            for key,val in zip(list1[2:],list2[2:]):
+                xyz[key] = float(val)
+            
+            list3 = strguy[6].split()                                            # process modes
+            list4 = strguy[7].split()
+            modes = OrderedDict()
+            for key,val in zip(list3[1:],list4):
+                modes[key] = float(val)
+        except:
+            import warnings
+            warnings.warn("Error trying to parse output. Please check standard out/error.")
+
+        return Result(stdout,stderr,phases,P,T,xyz,modes)
+
 
