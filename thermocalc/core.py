@@ -9,6 +9,66 @@ class rows_list(list):
     """
     pass
 
+class rbi(OrderedDict):
+    """
+    Simple container class to hold rbi info.
+
+    Params
+    ------
+    oxides: list
+        list of oxides. Ie, the rbi columns.
+
+    """
+    def __init__(self, oxides):
+        self.oxides = oxides
+    
+    def add_phase(self, phase, mode, oxides):
+        """
+        Add a phase to the rbi table. 
+
+        Params
+        ------
+        phase:  str
+            Name of phase to add. 
+        mode: str, float
+            Mode/proportion of phase.
+        oxides: list
+            Proportion of each oxide for phase. 
+        """
+        # create a dictionary for phase. 
+        self[phase] = OrderedDict()
+        self[phase]["mode"] = mode
+        if len(self.oxides) != len(oxides):
+            raise RuntimeError("Error parsing 'rbi' data.\nExpected oxide count ({}) is different from that encountered ({}) for phase '{}'.".format(len(self.oxides),len(oxides),phase))
+        for item in zip(self.oxides,oxides):
+            self[phase][item[0]]=item[1]
+    
+    def _generate_table_rows(self):
+        rows = [ ["",""]+self.oxides, ]
+        for key,item in self.items():
+            row = [key,] + list(item.values())
+            rows.append(row)
+        return rows
+
+    def __repr__(self):
+        """
+        This should a user friend representation.
+        """
+        from tabulate import tabulate
+        return tabulate(self._generate_table_rows(),tablefmt="plain")
+    
+    def __str__(self):
+        """
+        This should generate a TC compatible string.
+        """
+        rows = self._generate_table_rows()
+        for row in rows:
+            row.insert(0, "rbi")
+        from tabulate import tabulate
+        return tabulate(rows,tablefmt="plain")
+
+
+
 class Context(object):
     """
     The class records a context for a `thermocalc` computation.
@@ -161,6 +221,12 @@ class Context(object):
                         if "xyzguess" not in self.script.keys():
                             self.script["xyzguess"] = OrderedDict()
                         self.script["xyzguess"][value[0]] = value[1:]
+                    elif key=="rbi":
+                        if "rbi" not in self.script:
+                            # create `rbi` object and provide `value` for oxide columns
+                            self.script["rbi"] = rbi(value)
+                        else:
+                            self.script["rbi"].add_phase(phase=value[0],mode=value[1],oxides=value[2:])
                     else:
                         # first check the number of times this key has been encountered
                         keycount[key]+=1                       # increment key count
@@ -198,7 +264,10 @@ class Context(object):
         """
         longest = self._longest_key(self.script)
         for key, value in self.script.items():
-            if   isinstance(value, rows_list):
+            if key=="rbi":
+                print("\n{} :".format(key))
+                print(repr(value),"\n")
+            elif isinstance(value, rows_list):
                 print("{} :".format(key))
                 for item in value:
                     print("    {}".format(self._get_string(item,10)))
@@ -225,6 +294,8 @@ class Context(object):
                 if isinstance(value, rows_list):
                     for item in value:
                         fp.write("{} {}\n".format(key,self._get_string(item)))
+                elif isinstance(value,rbi):
+                    fp.write(str(value)+"\n")
                 elif isinstance(value, dict):
                     longest_inner = self._longest_key(value)
                     for valkey,item in value.items():
