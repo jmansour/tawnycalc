@@ -9,6 +9,76 @@ class rows_list(list):
     """
     pass
 
+class site_fractions(OrderedDict):
+    """
+    Simple container class to hold site fraction info.
+
+    """
+    def __init__(self):
+        self._data_title=None
+        pass
+
+    def add_data(self, line):
+        """
+        Adds data from a provided tokenised line of data. 
+
+        We expect data formatted like the following:
+
+            g          xMgX      xFeX      xCaX      xAlY     xFe3Y
+                    0.13698   0.82757   0.03545   0.98451   0.01549
+            bi        xMgM3     xFeM3    xFe3M3     xTiM3     xAlM3    xMgM12    xFeM12      xSiT      xAlT      xOHV       xOV
+                    0.23132   0.50716   0.05416   0.09110   0.11627   0.47293   0.52707   0.41479   0.58521   0.90890   0.09110
+            mu          xKA      xNaA      xCaA    xMgM2A    xFeM2A    xAlM2A    xAlM2B   xFe3M2B     xSiT1     xAlT1
+                    0.76707   0.22980   0.00313   0.05172   0.04523   0.90305   0.99381   0.00619   0.54691   0.45309
+            pa          xKA      xNaA      xCaA    xMgM2A    xFeM2A    xAlM2A    xAlM2B   xFe3M2B     xSiT1     xAlT1
+                    0.06836   0.91840   0.01324   0.00170   0.00149   0.99681   0.99881   0.00119   0.49498   0.50502
+
+        This method should be provided with the above data, one split line per call. The order 
+        the provided lines must follow the order of the data to ensure correct parsing. 
+
+        Params
+        ------
+        line:  list
+            List of string tokens read from the a TC input/output.
+        """
+
+        splitline = line
+        if self._data_title == None:
+            self._data_title = splitline[0]
+            # grab first token for dictionary key
+            currentdict = self[self._data_title] = OrderedDict()
+            # populate keys for sub-dictionary
+            for token in splitline[1:]:
+                currentdict[token] = None
+        else:
+            currentdict = self[self._data_title]
+            for key,value in zip(currentdict.keys(),splitline):
+                currentdict[key] = value
+            self._data_title = None
+    
+    def _generate_table_rows(self):
+        rows = []
+        for key,item in self.items():
+            row = [key,] + list(item.keys())
+            rows.append(row)
+            rows.append(["",]+list(item.values()))
+        return rows
+
+    def __repr__(self):
+        """
+        This should a user friend representation.
+        """
+        from tabulate import tabulate
+        return tabulate(self._generate_table_rows(),tablefmt="plain")
+    
+    def __str__(self):
+        """
+        This should generate a TC compatible string.
+        """
+        rows = self._generate_table_rows()
+        from tabulate import tabulate
+        return tabulate(rows,tablefmt="plain")
+
 class rbi(OrderedDict):
     """
     Simple container class to hold rbi info.
@@ -20,8 +90,19 @@ class rbi(OrderedDict):
 
     """
     def __init__(self, oxides):
-        self.oxides = oxides
-    
+        self.oxides = oxides.copy()
+
+    def add_data(self, line):
+        """
+        Adds data from a provided parsed line of data. 
+
+        Params
+        ------
+        line:  list
+            List of string tokens read from the a TC input/output.
+        """
+        self.add_phase(phase=line[0],mode=line[1],oxides=line[2:])
+
     def add_phase(self, phase, mode, oxides):
         """
         Add a phase to the rbi table. 
@@ -67,6 +148,14 @@ class rbi(OrderedDict):
         from tabulate import tabulate
         return tabulate(rows,tablefmt="plain")
 
+    def copy(self):
+        """
+        Returns a copy of current rbi object
+        """
+        cpy = rbi(self.oxides)        
+        for key,val in self.items():
+            cpy[key]=val.copy()
+        return cpy
 
 
 class Context(object):
@@ -160,14 +249,14 @@ class Context(object):
         # read tc-prefs
         self.prefs = OrderedDict()
         with open(tc_prefs,'r') as fp:
-            line = fp.readline()
-            while line:
+            while True:
+                line = fp.readline()
+                if not line: break
                 line = line.split("%", 1)[0]
                 splitline = line.split()
                 # print(splitline)
                 if len(splitline)>1:
                     self.prefs[splitline[0]] = splitline[1]
-                line = fp.readline()
         if 'scriptfile' not in self.prefs:
             raise RuntimeError("'scriptfile' does not appear to be specified in 'tc-prefs.txt' file.")
         if 'dataset' not in self.prefs:
@@ -195,8 +284,9 @@ class Context(object):
         from collections import defaultdict
         keycount = defaultdict(lambda: 0)
         with open(tc_sf,'r') as fp:
-            line = fp.readline()
-            while line:
+            while True:
+                line = fp.readline()
+                if not line: break
                 # get rid of everything after '%'
                 line = line.split("%", 1)[0]
                 splitline = line.split()
@@ -226,7 +316,7 @@ class Context(object):
                             # create `rbi` object and provide `value` for oxide columns
                             self.script["rbi"] = rbi(value)
                         else:
-                            self.script["rbi"].add_phase(phase=value[0],mode=value[1],oxides=value[2:])
+                            self.script["rbi"].add_data(value)
                     else:
                         # first check the number of times this key has been encountered
                         keycount[key]+=1                       # increment key count
@@ -238,7 +328,6 @@ class Context(object):
                             self.script[key] = rows            # now replace that previous value with the rows list (which contains it). 
                         if keycount[key] > 1:
                             self.script[key].append(value)     # append value to rows list of values 
-                line = fp.readline()
 
     def _longest_key(self, dictguy):
         """
@@ -375,7 +464,7 @@ class Context(object):
         std_data = p.communicate(input=b'n\n')
 
         from collections import namedtuple
-        Result = namedtuple("Results", ["stdout","stderr", "phases", "P", "T", "xyz", "modes"])
+        Result = namedtuple("Results", ["stdout","stderr", "phases", "P", "T", "xyz", "modes", "rbi", "tc_log", "site_fractions", "tc_ic"])
         stdout = std_data[0].decode("cp437") # record standard output
         stderr = std_data[1].decode("cp437") # record standard error
 
@@ -408,8 +497,59 @@ class Context(object):
                 modes[key] = float(val)
         except:
             import warnings
-            warnings.warn("Error trying to parse output. Please check standard out/error.")
+            warnings.warn("Error trying to parse stdard output. Please check standard out/error.")
 
-        return Result(stdout,stderr,phases,P,T,xyz,modes)
+        # try parse `tc-log.txt`
+        rbi = None
+        try:
+            with open(os.path.join(self.temp_dir,"tc-log.txt"),'r',encoding="cp437") as fp:
+                while True:
+                    line = fp.readline()
+                    if not line: break
+                    splitline = line.split()
+                    if len(splitline)>0:
+                        key = splitline[0]
+                        value = splitline[1:]
+                        if key=="rbi":
+                            if not rbi:
+                                # grab copy of existing rbi if available and oxides
+                                if ("rbi" in self.script.keys()) and (self.script["rbi"].oxides == value):
+                                    rbi = self.script["rbi"].copy()
+                                else:
+                                    rbi = rbi(value)
+                            else:
+                                rbi.add_data(value)
+        except:
+            import warnings
+            warnings.warn("Error trying to parse 'tc-log.txt'.")
+        # ok, grab entire output for user's convenience 
+        with open(os.path.join(self.temp_dir,"tc-log.txt"),'r',encoding="cp437") as fp:
+            tc_log = fp.read()
+
+        # try parse `tc-ic.txt`
+        filename = "tc-" + self.prefs["scriptfile"] + "-ic.txt"
+        site_fracs = None
+        try:
+            with open(os.path.join(self.temp_dir,filename),'r',encoding="cp437") as fp:
+                while True:
+                    line = fp.readline()
+                    if not line: break
+
+                    line = line.strip()
+                    if line=="site fractions":
+                        site_fracs = site_fractions()
+                        while True:
+                            line = fp.readline()
+                            if not line or (line == "\n"): break
+                            site_fracs.add_data(line.split())
+                                
+        except:
+            import warnings
+            warnings.warn("Error trying to parse '{}'.".format(filename))
+        # ok, grab entire output for user's convenience 
+        with open(os.path.join(self.temp_dir,filename),'r',encoding="cp437") as fp:
+            tc_ic = fp.read()
+
+        return Result(stdout,stderr,phases,P,T,xyz,modes,rbi,tc_log,site_fracs,tc_ic)
 
 
