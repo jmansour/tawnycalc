@@ -2,16 +2,15 @@
 import os
 from collections import OrderedDict
 
-class rows_list(list):
+class xyz(OrderedDict):
     """
-    This is just a dummy class so we can differentiate between
-    rows and list type entries in our in our script dictionary
+    Container for mineral composition data. 
     """
     pass
 
 class site_fractions(OrderedDict):
     """
-    Simple container class to hold site fraction info.
+    Container to hold site fraction info.
 
     """
     def __init__(self):
@@ -79,7 +78,74 @@ class site_fractions(OrderedDict):
         from tabulate import tabulate
         return tabulate(rows,tablefmt="plain")
 
-class rbi(OrderedDict):
+class _tabled_data(OrderedDict):
+    """
+    Container class to hold data derived of table layout.
+
+    Params
+    ------
+    header: list
+        The table header info.
+
+    """
+    def __init__(self, header):
+        self.header = []
+        for item in header:
+            self.header.append(item.strip())
+
+    def add_data(self, line):
+        """
+        Adds data from a provided parsed line of data. 
+
+        Params
+        ------
+        line:  list
+            List of string tokens read from the a TC input/output.
+        """
+        raise RuntimeError("Child must define.")
+    
+    def _generate_table_rows(self):
+        rows = [ ["",]+self.header, ]
+        for key,item in self.items():
+            row = [key,] + list(item.values())
+            rows.append(row)
+        return rows
+
+    def __str__(self):
+        """
+        This should generate a TC compatible string.
+        """
+        from tabulate import tabulate
+        return tabulate(self._generate_table_rows(),tablefmt="plain")
+ 
+    def __repr__(self):
+        """
+        This should a user friend representation.
+        """
+        return self.__str__()
+    
+
+class thermodynamic_properties(_tabled_data):
+    """
+    Container class for thermodynamic properties parsed
+    from tc-ic file. 
+    """
+    def add_data(self, line):
+        """
+        Adds data from a provided parsed line of data. 
+
+        Params
+        ------
+        line:  list
+            List of string tokens read from the a TC input/output.
+        """
+        if len(line) != len(self.header)+1:
+            raise RuntimeError("Error parsing thermodynamic data.\nExpected property count ({}) is different from that encountered ({}) for phase '{}'.".format(len(self.header),len(line)-1,line[0]))
+        phase_dict = self[line[0]] = OrderedDict()
+        for key,value in zip(self.header,line[1:]):
+            phase_dict[key] = value
+
+class rbi(_tabled_data):
     """
     Simple container class to hold rbi info.
 
@@ -90,7 +156,10 @@ class rbi(OrderedDict):
 
     """
     def __init__(self, oxides):
-        self.oxides = oxides.copy()
+        if isinstance(oxides, str):
+            oxides = oxides.split()
+        super().__init__(header=oxides)
+        self.oxides = self.header
 
     def add_data(self, line):
         """
@@ -117,8 +186,11 @@ class rbi(OrderedDict):
             Proportion of each oxide for phase. 
         """
         # create a dictionary for phase. 
+        phase = phase.strip()
         self[phase] = OrderedDict()
         self[phase]["mode"] = mode
+        if isinstance(oxides, str):
+            oxides = oxides.split()
         if len(self.oxides) != len(oxides):
             raise RuntimeError("Error parsing 'rbi' data.\nExpected oxide count ({}) is different from that encountered ({}) for phase '{}'.".format(len(self.oxides),len(oxides),phase))
         for item in zip(self.oxides,oxides):
@@ -163,13 +235,14 @@ class Context(object):
     The class records a context for a `thermocalc` computation.
     Multiple concurrent running contexts are allowed.
 
-    The context will leverage the standard `thermocalc` input files
-    to define the runtime environment, and by default it will obtain
-    these files from script launch directory. The user may also 
-    specify the script location via the `tc_prefs` parameter. 
+    The default behaviour is for the context to leverage the standard 
+    `thermocalc` input files to for model setup. The user may optionally
+    also start with an empty context and construct their model from the 
+    ground up.
 
-    The `thermocalc` executable must also be available. To use the
-    executable, the the script will consider, in order of preference:
+    The `thermocalc` executable must be available somewhere on the user 
+    system. To use the executable, the the script will consider, in order 
+    of preference:
 
     1. User provided `tc_executable` parameter to this class.
     2. User set environment variable `THERMOCALC_EXECUTABLE` defining
@@ -183,16 +256,17 @@ class Context(object):
 
     Params
     ------
-    work_dir: str
+    scripts_dir: str
         Path to find thermocalc files (in particular `tc-prefs.txt`).
-        Defaults to current directory. 
+        Defaults to current directory, which is usually the directory where
+        Python was launched from. Set to `None` to obtain an empty context. 
     tc_executable: str
         Thermocalc executable. Check class descriptor for further information.
     temp_dir: str
         Temporary location used for the `thermocalc` execution. If not specified,
         a standard system location is used. 
     """
-    def __init__(self, work_dir=os.getcwd(), tc_executable=None, temp_dir=None):
+    def __init__(self, scripts_dir=os.getcwd(), tc_executable=None, temp_dir=None):
         # lets first check that we have an executable
         # the following is borrowed from https://stackoverflow.com/questions/377017/test-if-executable-exists-in-python
         def which(program):
@@ -223,17 +297,18 @@ class Context(object):
             if self.exec is None:
                 raise RuntimeError("Unable to find `thermo` executable. Ensure it is in your path, or set " \
                                    "the `THERMOCALC_EXECUTABLE` environment variable, or the `tc_executable` parameter.")
-        self.work_dir = work_dir
+        self.scripts_dir = scripts_dir
+        def randomword():
+            import random, string
+            letters = string.ascii_lowercase
+            return ''.join(random.choice(letters) for i in range(6))
+        self._id = randomword()
         self.reload()
+
 
         if not temp_dir:
             import tempfile
-            import random, string
-            def randomword():
-                letters = string.ascii_lowercase
-                randstr = ''.join(random.choice(letters) for i in range(6))
-                return 'TC_'+randstr
-            temp_dir = os.path.join(tempfile.gettempdir(), randomword())
+            temp_dir = os.path.join(tempfile.gettempdir(), 'TC_'+self._id)
         if not os.path.exists(temp_dir):
             os.makedirs(temp_dir)
         self.temp_dir = temp_dir
@@ -242,92 +317,115 @@ class Context(object):
         """
         Reloads data from working directory.
         """
-        # find tc-prefs.txt
-        tc_prefs = os.path.join(self.work_dir,'tc-prefs.txt')
-        if not os.path.isfile(tc_prefs):
-            raise RuntimeError("Unable to find 'tc-prefs.txt' in '{}'".format(work_dir))
-        # read tc-prefs
+        # create some defaults
         self.prefs = OrderedDict()
-        with open(tc_prefs,'r') as fp:
-            while True:
-                line = fp.readline()
-                if not line: break
-                line = line.split("%", 1)[0]
-                splitline = line.split()
-                # print(splitline)
-                if len(splitline)>1:
-                    self.prefs[splitline[0]] = splitline[1]
-        if 'scriptfile' not in self.prefs:
-            raise RuntimeError("'scriptfile' does not appear to be specified in 'tc-prefs.txt' file.")
+        self.prefs["calcmode"] = 1
+        self.prefs["scriptfile"] = self._id
+        self.prefs["dataset"] = None
+        # create an ordered dictionary to record key/value pairs
+        self.script = OrderedDict()
+        self.script["axfile"] = None
+        self.script["autoexit"] = "yes"
+
+        # load from existing inputs if required
+        if self.scripts_dir:
+            # find tc-prefs.txt        
+            tc_prefs = os.path.join(self.scripts_dir,'tc-prefs.txt')
+            if not os.path.isfile(tc_prefs):
+                raise RuntimeError("Unable to find 'tc-prefs.txt' in '{}'".format(self.scripts_dir))
+            # read tc-prefs
+            with open(tc_prefs,'r') as fp:
+                while True:
+                    line = fp.readline()
+                    if not line: break
+                    line = line.split("%", 1)[0]
+                    splitline = line.split()
+                    # print(splitline)
+                    if len(splitline)>1:
+                        self.prefs[splitline[0]] = splitline[1]
+            if 'scriptfile' not in self.prefs:
+                raise RuntimeError("'scriptfile' does not appear to be specified in 'tc-prefs.txt' file.")
+
+            # find dataset 
+            ds = 'tc-ds' + self.prefs['dataset'] + '.txt'
+            tc_ds = os.path.join(self.scripts_dir,ds)
+            if not os.path.isfile(tc_ds):
+                raise RuntimeError("Unable to find dataset file '{}' in '{}'".format(ds,self.scripts_dir))
+
+            # find scriptfile 
+            sf = 'tc-' + self.prefs['scriptfile'] + '.txt'
+            tc_sf = os.path.join(self.scripts_dir,sf)
+            if not os.path.isfile(tc_sf):
+                raise RuntimeError("Unable to find scriptfile '{}' in '{}'".format(sf,self.scripts_dir))
+            # read script file
+            # keep track of repeated keys to handle differently
+            from collections import defaultdict
+            keycount = defaultdict(lambda: 0)
+            with open(tc_sf,'r') as fp:
+                while True:
+                    line = fp.readline()
+                    if not line: break
+                    # get rid of everything after '%'
+                    line = line.split("%", 1)[0]
+                    splitline = line.split()
+                    if len(splitline)>0:
+                        if splitline[0] == '*':                # don't read anything past here
+                            break
+                        key = splitline[0]
+                        value = splitline[1:]
+                        # now need to decide how to enter into dictionary.
+                        # treat "xyzguess" as dictionary
+                        if key=="xyzguess":
+                            if "xyzguess" not in self.script.keys():
+                                self.script["xyzguess"] = xyz()
+                            self.script["xyzguess"][value[0]] = value[1:]
+                        elif key=="rbi":
+                            if "rbi" not in self.script:
+                                # create `rbi` object and provide `value` for oxide columns
+                                self.script["rbi"] = rbi(value)
+                            else:
+                                self.script["rbi"].add_data(value)
+                        else:
+                            val_count = len(value)
+                            if val_count == 0:                   # if no values, just set to None
+                                value = None
+                            else:
+                                value = " ".join(value)
+                                if value == 'ask':
+                                    raise RuntimeError("'ask' is not supported setting from Python interface.")
+                            # first check the number of times this key has been encountered
+                            keycount[key]+=1                       # increment key count
+                            if   keycount[key] == 1:               # if only encountered once, simply create direct pair
+                                self.script[key] = value
+                            if keycount[key] == 2:                 # this is the second time we've encountered this key,
+                                rows = list()                      # so create a list store the rows,
+                                rows.append(self.script[key])      # and append previously encountered value as first item in row list.
+                                self.script[key] = rows            # now replace that previous value with the rows list (which contains it). 
+                                                                   # note that the new value is entered in the following block.
+                            if keycount[key] > 1:
+                                self.script[key].append(value)     # append value to rows list of values
+            self.check_config()
+
+
+    def check_config(self):
+        """
+        This method performs sanity checks on your current configuration. 
+
+        It will return nothing if it does not detect any issues, and will 
+        raise an exception otherwise.  
+        """
         if 'dataset' not in self.prefs:
             raise RuntimeError("'dataset' does not appear to be specified in 'tc-prefs.txt' file.")
         if 'calcmode' not in self.prefs:
             raise RuntimeError("'calcmode' does not appear to be specified in 'tc-prefs.txt' file.")
-        if self.prefs['calcmode'] != '1':
+        if int(self.prefs['calcmode']) != 1:
             raise RuntimeError("Python wrappers currently only support 'calcmode' 1.")
 
-        # find dataset 
-        ds = 'tc-ds' + self.prefs['dataset'] + '.txt'
-        tc_ds = os.path.join(self.work_dir,ds)
-        if not os.path.isfile(tc_ds):
-            raise RuntimeError("Unable to find dataset file '{}' in '{}'".format(ds,self.work_dir))
+        if "axfile" not in self.script:
+            raise RuntimeError("Your script must specify an 'axfile'.")
+        if self.script["axfile"] == None:
+            raise RuntimeError("Your script must specify a valid 'axfile'.")
 
-        # find scriptfile 
-        sf = 'tc-' + self.prefs['scriptfile'] + '.txt'
-        tc_sf = os.path.join(self.work_dir,sf)
-        if not os.path.isfile(tc_sf):
-            raise RuntimeError("Unable to find scriptfile '{}' in '{}'".format(sf,self.work_dir))
-        # read script file
-        # create an ordered dictionary to record key/value pairs
-        self.script = OrderedDict()
-        # keep track of repeated keys to handle differently
-        from collections import defaultdict
-        keycount = defaultdict(lambda: 0)
-        with open(tc_sf,'r') as fp:
-            while True:
-                line = fp.readline()
-                if not line: break
-                # get rid of everything after '%'
-                line = line.split("%", 1)[0]
-                splitline = line.split()
-                if len(splitline)>0:
-                    if splitline[0] == '*':                # don't read anything past here
-                        break
-                    key = splitline[0]
-                    value = splitline[1:]
-                    # first let's decide how to process value(s)
-                    val_count = len(value)
-                    if   val_count == 0:                   # if no values, just set to None
-                        value = None
-                    elif val_count == 1:                   # if a single value, create direct key/val pair
-                        value = value[0]
-                        if value == 'ask':
-                            raise RuntimeError("'ask' is not currently a supported setting from Python interface.")
-                    else:                                  # otherwise, leave as a list
-                        pass
-                    # now need to decide how to enter into dictionary.
-                    # treat "xyzguess" as dictionary
-                    if key=="xyzguess":
-                        if "xyzguess" not in self.script.keys():
-                            self.script["xyzguess"] = OrderedDict()
-                        self.script["xyzguess"][value[0]] = value[1:]
-                    elif key=="rbi":
-                        if "rbi" not in self.script:
-                            # create `rbi` object and provide `value` for oxide columns
-                            self.script["rbi"] = rbi(value)
-                        else:
-                            self.script["rbi"].add_data(value)
-                    else:
-                        # first check the number of times this key has been encountered
-                        keycount[key]+=1                       # increment key count
-                        if   keycount[key] == 1:               # if only encountered once, simply create direct pair
-                            self.script[key] = value
-                        if keycount[key] == 2:                 # this is the second time we've encountered this key,
-                            rows = rows_list()                 # so create a list store the rows,
-                            rows.append(self.script[key])      # and append previously encountered value as first item in row list.
-                            self.script[key] = rows            # now replace that previous value with the rows list (which contains it). 
-                        if keycount[key] > 1:
-                            self.script[key].append(value)     # append value to rows list of values 
 
     def _longest_key(self, dictguy):
         """
@@ -356,7 +454,7 @@ class Context(object):
             if key=="rbi":
                 print("\n{} :".format(key))
                 print(repr(value),"\n")
-            elif isinstance(value, rows_list):
+            elif isinstance(value, list):
                 print("{} :".format(key))
                 for item in value:
                     print("    {}".format(self._get_string(item,10)))
@@ -380,7 +478,7 @@ class Context(object):
         with open(file,'w') as fp:
             longest = self._longest_key(self.script)
             for key, value in self.script.items():
-                if isinstance(value, rows_list):
+                if isinstance(value, list):
                     for item in value:
                         fp.write("{} {}\n".format(key,self._get_string(item)))
                 elif isinstance(value,rbi):
@@ -414,31 +512,64 @@ class Context(object):
             for key, value in self.prefs.items():
                 fp.write("{} {}\n".format(key.ljust(longest+1),self._get_string(value)))
 
-    def execute(self, copy_new_files=False):
+    def execute(self, print_output=False, copy_new_files=False, datasets_dir=None):
         """
-        Execute thermocalc for the current configuration. 
+        Execute thermocalc for the current configuration, and parse generated
+        outputs. Recorded outputs include execution standard output (`stdout`),
+        standard error (`stderr`), `tc-log.txt` and `tc-ic.txt`.
 
         Files generated as a result of the execution are as default not copied
-        back to the context location 
+        back to the context location.
+
+        All results are returned as a dictionary. Refer to the list of dictionary 
+        keys to get a list of returned data:
+
+        >>> results = mycontext.execute()
+        >>> results.print_keys()
+        P
+        T
+        bulk_composition
+        modes
+        output_stderr
+        output_stdout
+        output_tc_ic
+        output_tc_log
+        phases
+        rbi
+        site_fractions
+        thermodynamic_properties
+        xyz
+
+        Results objects prepended with `output_` provide the raw text from the 
+        corresponding output. Note also that dictionary entries can be accessed 
+        directly as attributes or via the usual dictionary methods:
+
+        >>> results.P
+        11.0
+        >>> results["P"]
+        11.0
+
 
         Params
         ------
+        print_output: bool
+            If set to `True`, prints `thermocalc` output to screen. 
         copy_new_files: bool
             Files which are generated resultant of the `thermocalc` execution are by 
             default not copied back to the context location. Enable this flag to have
             generated files copied. 
 
+        datasets_dir: string
+            Location of required datasets. It is usually not necessary to specify this
+            as the files will be obtained from the `scripts_dir` or from `tawnycalc` 
+            itself. 
+
         Returns
         -------
-        Named tuple including:
-            stdout: The full standard output from the `thermocalc` simulation.
-            stderr: The full standard error from the `thermocalc` simulation.
-            phases: List of phases.
-            P     : Pressure (kbar).
-            T     : Temperature (íC).
-            xyz   : Mineral compositions (as a dictionary).
-            modes : Mineral modes (as a dictionary).
+        results: dict
+            Dictionary containing execution results.
         """
+        self.check_config()
 
         if copy_new_files:
             import warnings
@@ -450,57 +581,47 @@ class Context(object):
         # write script file
         self.save_script(os.path.join(self.temp_dir,"tc-"+self.prefs['scriptfile']+".txt"))
 
+        # if not provided in this call
+        if not datasets_dir:
+            # set to scripts dir provided when context created.
+            datasets_dir = self.scripts_dir
+        # if still nothing
+        if not datasets_dir:
+            # use python module files
+            datasets_dir = os.path.join(__file__[:-7],"datasets")
+        
         # now copy dataset file
         from shutil import copyfile
         dataset = "tc-ds{}.txt".format(self.prefs['dataset'])
-        copyfile(os.path.join(self.work_dir,dataset), os.path.join(self.temp_dir,dataset))
+        copyfile(os.path.join(datasets_dir,dataset), os.path.join(self.temp_dir,dataset))
 
         # now copy axfile
         axfile = "tc-{}.txt".format(self.script['axfile'])
-        copyfile(os.path.join(self.work_dir,axfile), os.path.join(self.temp_dir,axfile))
+        copyfile(os.path.join(datasets_dir,axfile), os.path.join(self.temp_dir,axfile))
 
         from subprocess import Popen, PIPE, STDOUT
         p = Popen(self.exec,cwd=self.temp_dir, stdout=PIPE, stdin=PIPE, stderr=PIPE)
+        if print_output:
+            for line in iter(p.stdout.readline, b''):
+                print('{}'.format(line.decode("cp437").rstrip()))
         std_data = p.communicate(input=b'n\n')
 
-        from collections import namedtuple
-        Result = namedtuple("Results", ["stdout","stderr", "phases", "P", "T", "xyz", "modes", "rbi", "tc_log", "site_fractions", "tc_ic"])
-        stdout = std_data[0].decode("cp437") # record standard output
-        stderr = std_data[1].decode("cp437") # record standard error
 
-        phases = None
-        P = None
-        T = None
-        xyz = None
-        modes = None
+        # create a special dictionary which allows keys/vals to be accessed
+        # via object attributes
+        class ResultsDict(dict):
+            def __init__(self, *args, **kwargs):
+                super(ResultsDict, self).__init__(*args, **kwargs)
+                self.__dict__ = self
+            def print_keys(self):
+                for key in sorted(self.keys()):
+                    print(key)
 
-        # now let's try and parse output.  
-        # put in a 'try' block so that we can fail usefully.
-        try:
-            splt1 = "##########################################################"
-            splt2 = "more phase diagram calculations"
-            strguy = stdout.split(splt1)[1].split(splt2)[0].split('\n')          # split on above blocks, then on new line
-            phases = strguy[1].split('phases: ')[1]                              # grab phases
-
-            list1 = strguy[3].split()                                            # process P, T, xyz
-            list2 = strguy[4].split()
-            P = float(list2[0])
-            T = float(list2[1])
-            xyz = OrderedDict()
-            for key,val in zip(list1[2:],list2[2:]):
-                xyz[key] = float(val)
-            
-            list3 = strguy[6].split()                                            # process modes
-            list4 = strguy[7].split()
-            modes = OrderedDict()
-            for key,val in zip(list3[1:],list4):
-                modes[key] = float(val)
-        except:
-            import warnings
-            warnings.warn("Error trying to parse stdard output. Please check standard out/error.")
+        results = ResultsDict()
+        results["output_stdout"] = std_data[0].decode("cp437") # record standard output
+        results["output_stderr"] = std_data[1].decode("cp437") # record standard error
 
         # try parse `tc-log.txt`
-        rbi = None
         try:
             with open(os.path.join(self.temp_dir,"tc-log.txt"),'r',encoding="cp437") as fp:
                 while True:
@@ -510,25 +631,53 @@ class Context(object):
                     if len(splitline)>0:
                         key = splitline[0]
                         value = splitline[1:]
-                        if key=="rbi":
-                            if not rbi:
-                                # grab copy of existing rbi if available and oxides
-                                if ("rbi" in self.script.keys()) and (self.script["rbi"].oxides == value):
-                                    rbi = self.script["rbi"].copy()
-                                else:
-                                    rbi = rbi(value)
+                        if   key=="THERMOCALC":
+                            # let's check version
+                            try:
+                                # grab first line
+                                version = splitline[1]
+                                if version != "3.50":
+                                    import warnings
+                                    warnings.warn("`tawnycalc` only tested against `thermocalc` version 3.50. Detected version is {}.".format(version))
+                            except:
+                                import warnings
+                                warnings.warn("Unable to detect `thermocalc` version. Note that `tawnycalc` only tested against `thermocalc` version 3.50.")
+                        elif key=="rbi":
+                            if "rbi" not in results.keys():
+                                # # grab copy of existing rbi if available and oxides
+                                # if ("rbi" in self.script.keys()) and (self.script["rbi"].oxides == value):
+                                #     results["rbi"] = self.script["rbi"].copy()
+                                # else:
+                                results["rbi"] = rbi(value)
                             else:
-                                rbi.add_data(value)
+                                results["rbi"].add_data(value)
+                        elif key=="phases:":
+                            results["phases"] = value
+                        elif key=="ptguess":
+                            results["P"] = value[0]
+                            results["T"] = value[1]
+                        elif key=="xyzguess":
+                            if "xyz" not in results.keys():
+                                results["xyz"] = xyz()
+                            results["xyz"][value[0]] = float(value[1])
+                        elif key=="mode":
+                            modes = OrderedDict()
+                            mode_keys   = value                  # keys from first line
+                            mode_values = fp.readline().split()  # values from next                            
+                            for mode_key,mode_value in zip(mode_keys,mode_values):
+                                modes[mode_key] = float(mode_value)
+                            results["modes"] = modes
+
         except:
+            raise
             import warnings
             warnings.warn("Error trying to parse 'tc-log.txt'.")
         # ok, grab entire output for user's convenience 
         with open(os.path.join(self.temp_dir,"tc-log.txt"),'r',encoding="cp437") as fp:
-            tc_log = fp.read()
+            results["output_tc_log"] = fp.read()
 
         # try parse `tc-ic.txt`
         filename = "tc-" + self.prefs["scriptfile"] + "-ic.txt"
-        site_fracs = None
         try:
             with open(os.path.join(self.temp_dir,filename),'r',encoding="cp437") as fp:
                 while True:
@@ -542,14 +691,39 @@ class Context(object):
                             line = fp.readline()
                             if not line or (line == "\n"): break
                             site_fracs.add_data(line.split())
-                                
+                        results["site_fractions"] = site_fracs
+
+                    if line=="oxide compositions":
+                        bulk_composition = OrderedDict()
+                        keys = fp.readline().split()    # keys in first line
+                        while True:
+                            line = fp.readline()
+                            if not line or (line == "\n"): break
+                            tokens = line.split()
+                            if tokens[0] == 'bulk':
+                                for key,value in zip(keys,tokens[1:]):
+                                    bulk_composition[key] = float(value)
+                        results["bulk_composition"] = bulk_composition
+
+                        # now thermo props. 
+                        # we assume here that they appear directly after the "oxide composition" section.
+                        while True:
+                            line = fp.readline()
+                            if not line or (line == "\n"): break
+                            tokens = line.split()
+                            thermo_props = thermodynamic_properties(tokens)
+                            while True:
+                                line = fp.readline()
+                                if not line or (line == "\n"): break
+                                thermo_props.add_data(line.split())
+                            results["thermodynamic_properties"] = thermo_props
+                            break
         except:
             import warnings
             warnings.warn("Error trying to parse '{}'.".format(filename))
         # ok, grab entire output for user's convenience 
         with open(os.path.join(self.temp_dir,filename),'r',encoding="cp437") as fp:
-            tc_ic = fp.read()
+            results["output_tc_ic"] = fp.read()
 
-        return Result(stdout,stderr,phases,P,T,xyz,modes,rbi,tc_log,site_fracs,tc_ic)
-
+        return results
 
