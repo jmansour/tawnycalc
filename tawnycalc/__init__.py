@@ -34,10 +34,13 @@ Attributes
 ----------
 datasets : list
     List of datasets provided with the `tawnycalc` package.
+axfiles  : list
+    List of a-x files provided with the `tawnycalc` package.
 
 """
 
-from .core import Context, rbi, xyz
+from .core import Context
+from .data_objects import rbi, xyz
 
 datasets = [62,633]
 axfiles  = ["mb50NCKFMASHTO"]
