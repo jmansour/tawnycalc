@@ -1,8 +1,11 @@
 TawnyCALC 
 =========
 
-.. image:: tawnycalc.pdf
+.. image:: tawnycalc.png
   :width: 400
+
+.. image:: https://mybinder.org/badge_logo.svg
+ :target: https://mybinder.org/v2/gh/jmansour/tawnycalc/master
 
 `tawnycalc` provides tools for the orchestration of `thermocalc` simulations
 from a Python environment.
