@@ -2,7 +2,7 @@ TawnyCALC
 =========
 
 .. image:: tawnycalc.png
-  :width: 400
+  :width: 100
 
 .. image:: https://mybinder.org/badge_logo.svg
  :target: https://mybinder.org/v2/gh/jmansour/tawnycalc/master
