@@ -3,6 +3,8 @@ TawnyCALC
 
 .. image:: tawnycalc.png
   :width: 100
+  :scale: 25
+  :align: left
 
 .. image:: https://mybinder.org/badge_logo.svg
  :target: https://mybinder.org/v2/gh/jmansour/tawnycalc/master
