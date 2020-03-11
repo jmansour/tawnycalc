@@ -96,9 +96,9 @@ class Context(object):
         self.prefs["scriptfile"] = self._id
         self.prefs["dataset"] = None
         # create an ordered dictionary to record key/value pairs
-        self.script = OrderedDict()
-        self.script["axfile"] = None
-        self.script["autoexit"] = "yes"
+        self._script = OrderedDict()
+        self._script["axfile"] = None
+        self._script["autoexit"] = "yes"
 
         # load from existing inputs if required
         if self.scripts_dir:
@@ -149,15 +149,15 @@ class Context(object):
                         # now need to decide how to enter into dictionary.
                         # treat "xyzguess" as dictionary
                         if key=="xyzguess":
-                            if "xyzguess" not in self.script.keys():
-                                self.script["xyzguess"] = xyz()
-                            self.script["xyzguess"][value[0]] = value[1:]
+                            if "xyzguess" not in self._script.keys():
+                                self._script["xyzguess"] = xyz()
+                            self._script["xyzguess"][value[0]] = value[1:]
                         elif key=="rbi":
-                            if "rbi" not in self.script:
+                            if "rbi" not in self._script:
                                 # create `rbi` object and provide `value` for oxide columns
-                                self.script["rbi"] = rbi(value)
+                                self._script["rbi"] = rbi(value)
                             else:
-                                self.script["rbi"].add_data(value)
+                                self._script["rbi"].add_data(value)
                         else:
                             val_count = len(value)
                             if val_count == 0:                   # if no values, just set to None
@@ -169,14 +169,14 @@ class Context(object):
                             # first check the number of times this key has been encountered
                             keycount[key]+=1                       # increment key count
                             if   keycount[key] == 1:               # if only encountered once, simply create direct pair
-                                self.script[key] = value
+                                self._script[key] = value
                             if keycount[key] == 2:                 # this is the second time we've encountered this key,
                                 rows = list()                      # so create a list store the rows,
-                                rows.append(self.script[key])      # and append previously encountered value as first item in row list.
-                                self.script[key] = rows            # now replace that previous value with the rows list (which contains it). 
+                                rows.append(self._script[key])      # and append previously encountered value as first item in row list.
+                                self._script[key] = rows            # now replace that previous value with the rows list (which contains it). 
                                                                    # note that the new value is entered in the following block.
                             if keycount[key] > 1:
-                                self.script[key].append(value)     # append value to rows list of values
+                                self._script[key].append(value)     # append value to rows list of values
             self.check_config()
 
 
@@ -194,9 +194,9 @@ class Context(object):
         if int(self.prefs['calcmode']) != 1:
             raise RuntimeError("Python wrappers currently only support 'calcmode' 1.")
 
-        if "axfile" not in self.script:
+        if "axfile" not in self._script:
             raise RuntimeError("Your script must specify an 'axfile'.")
-        if self.script["axfile"] == None:
+        if self._script["axfile"] == None:
             raise RuntimeError("Your script must specify a valid 'axfile'.")
 
 
@@ -218,12 +218,51 @@ class Context(object):
             return " ".join(str(p).ljust(just) for p in item)
         return item
 
+    @property
+    def script(self):
+        """
+        The `script` dictionary contains your `thermocalc` model configuration. 
+        This dictionary will be populated with the data from your `thermocalc` 
+        scripts where the `scripts_dir` parameter is passed when constructing
+        your `Context`.  Otherwise it will be empty and you will be required 
+        to sufficiently populate it.  In either case, you may add, modify and
+        delete values as necessary before calling `execute`. 
+
+        Key/Value pairs will be directly printed to form standard `thermocalc`
+        input.  For example 
+
+        >>> context.script[       "axfile"] = "mb50NCKFMASHTO"
+        >>> context.script[        "which"] = "chl bi pa ep ru chl g ilm sph"
+        >>> context.script[     "inexcess"] = "mu q H2O"
+        >>> context.script[       "dogmin"] = "yes 0"
+
+        is equivalent to
+
+            axfile   mb50NCKFMASHTO
+            which    chl bi pa ep ru chl g ilm sph
+            inexcess mu q H2O
+            dogmin   yes 0
+
+        To form repeat keyword entries, set the required corresponding values 
+        in a Python list.  For example:
+
+        >>> context.script[   "samecoding"] = ["mu pa", "sp mt"]
+
+        is equivalent to
+
+            samecoding mu pa
+            samecoding sp mt
+
+        """
+        return self._script
+
+
     def print_script(self):
         """
         Prints the current loaded script configuration.
         """
-        longest = self._longest_key(self.script)
-        for key, value in self.script.items():
+        longest = self._longest_key(self._script)
+        for key, value in self._script.items():
             if key=="rbi":
                 print("\n{} :".format(key))
                 print(repr(value),"\n")
@@ -249,8 +288,8 @@ class Context(object):
             Filename for saved file.
         """
         with open(file,'w') as fp:
-            longest = self._longest_key(self.script)
-            for key, value in self.script.items():
+            longest = self._longest_key(self._script)
+            for key, value in self._script.items():
                 if isinstance(value, list):
                     for item in value:
                         fp.write("{} {}\n".format(key,self._get_string(item)))
@@ -369,7 +408,7 @@ class Context(object):
         copyfile(os.path.join(datasets_dir,dataset), os.path.join(self.temp_dir,dataset))
 
         # now copy axfile
-        axfile = "tc-{}.txt".format(self.script['axfile'])
+        axfile = "tc-{}.txt".format(self._script['axfile'])
         copyfile(os.path.join(datasets_dir,axfile), os.path.join(self.temp_dir,axfile))
 
         from subprocess import Popen, PIPE, STDOUT
@@ -418,8 +457,8 @@ class Context(object):
                         elif key=="rbi":
                             if "rbi" not in results.keys():
                                 # # grab copy of existing rbi if available and oxides
-                                # if ("rbi" in self.script.keys()) and (self.script["rbi"].oxides == value):
-                                #     results["rbi"] = self.script["rbi"].copy()
+                                # if ("rbi" in self._script.keys()) and (self._script["rbi"].oxides == value):
+                                #     results["rbi"] = self._script["rbi"].copy()
                                 # else:
                                 results["rbi"] = rbi(value)
                             else:

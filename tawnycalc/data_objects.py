@@ -157,7 +157,7 @@ class thermodynamic_properties(_tabled_data):
 
 class rbi(_tabled_data):
     """
-    Simple container class to hold rbi info.
+    Simple container class to hold rbi information.
 
     Params
     ------
@@ -192,19 +192,19 @@ class rbi(_tabled_data):
             Name of phase to add. 
         mode: str, float
             Mode/proportion of phase.
-        oxides: list
+        oxides: str,list
             Proportion of each oxide for phase. 
         """
         # create a dictionary for phase. 
         phase = phase.strip()
         self[phase] = OrderedDict()
-        self[phase]["mode"] = mode
+        self[phase]["mode"] = float(mode)
         if isinstance(oxides, str):
             oxides = oxides.split()
         if len(self.oxides) != len(oxides):
             raise RuntimeError("Error parsing 'rbi' data.\nExpected oxide count ({}) is different from that encountered ({}) for phase '{}'.".format(len(self.oxides),len(oxides),phase))
         for item in zip(self.oxides,oxides):
-            self[phase][item[0]]=item[1]
+            self[phase][item[0]]=float(item[1])
     
     def _generate_table_rows(self):
         rows = [ ["",""]+self.oxides, ]

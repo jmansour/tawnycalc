@@ -1,6 +1,9 @@
 TawnyCALC 
 =========
 
+.. image:: tawnycalc.pdf
+  :width: 400
+
 `tawnycalc` provides tools for the orchestration of `thermocalc` simulations
 from a Python environment.
 

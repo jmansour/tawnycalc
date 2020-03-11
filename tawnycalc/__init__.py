@@ -38,7 +38,7 @@ axfiles  : list
     List of a-x files provided with the `tawnycalc` package.
 
 """
-
+__version__ = "0.1.0"
 from .core import Context
 from .data_objects import rbi, xyz
 
